@@ -10,7 +10,7 @@ use axum::{
     Json, Router,
 };
 use kairos_application::{
-    models::{Action, Command},
+    models::{Action, Command, Snapshot},
     Application,
 };
 use serde::Deserialize;
@@ -27,7 +27,9 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 struct AppState {
+    updates: tokio::sync::watch::Receiver<Arc<Snapshot>>,
     app: Arc<Mutex<Application>>,
+    cycle_stop: Arc<std::sync::atomic::AtomicBool>,
     kill: Arc<std::sync::atomic::AtomicBool>,
     owner_token: Arc<String>,
     sessions: Arc<Mutex<HashMap<String, Instant>>>,
@@ -163,27 +165,35 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoR
     )
 }
 async fn snapshot(State(state): State<AppState>) -> impl IntoResponse {
-    Json(state.app.lock().await.snapshot())
+    Json(json!(&**state.updates.borrow()))
 }
 async fn command(
     State(state): State<AppState>,
     Json(command): Json<Command>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if matches!(
+        command.action,
+        Action::StopCycles | Action::Pause | Action::Kill | Action::StopSession
+    ) {
+        state.cycle_stop.store(true, Ordering::SeqCst);
+    }
     if matches!(command.action, Action::Kill) {
         state.kill.store(true, Ordering::SeqCst);
     }
-    state
-        .app
-        .lock()
+    // An accepted command must finish even if its HTTP client reloads/disconnects.
+    tokio::spawn(async move { state.app.lock().await.command(command).await })
         .await
-        .command(command)
-        .await
+        .map_err(|_| {
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Runtime command task stopped",
+            )
+        })?
         .map(Json)
         .map_err(|message| error(StatusCode::UNPROCESSABLE_ENTITY, &message))
 }
 async fn ready(State(state): State<AppState>) -> impl IntoResponse {
-    let app = state.app.lock().await;
-    let snapshot = app.snapshot();
+    let snapshot = state.updates.borrow().clone();
     let ready = snapshot
         .readiness
         .iter()
@@ -206,21 +216,27 @@ async fn websocket(
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     let session = session_cookie(&headers).unwrap_or_default().to_owned();
-    ws.max_message_size(4096).on_upgrade(move |mut socket|async move {
-        let mut interval=tokio::time::interval(Duration::from_secs(1)); let mut sequence=None;
+    ws.max_message_size(4096).on_upgrade(move |mut socket| async move {
+        let mut updates = state.updates.clone();
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        let mut initial = true;
         loop {
             tokio::select! {
-                _=interval.tick()=>{
+                changed = updates.changed() => { if changed.is_err() { break; } }
+                _ = interval.tick() => {
                     if !state.sessions.lock().await.get(&session).is_some_and(|created| created.elapsed() < Duration::from_secs(3600)) { break; }
-                    let snapshot=state.app.lock().await.snapshot();
-                    if sequence != Some(snapshot.state.sequence) {
-                        sequence=Some(snapshot.state.sequence);
-                        let event=json!({"type":"runtime.snapshot","version":1,"sequence":snapshot.state.sequence,"payload":snapshot});
-                        if !matches!(tokio::time::timeout(Duration::from_secs(3),socket.send(Message::Text(event.to_string().into()))).await,Ok(Ok(()))) { break; }
-                    }
+                    if !initial && !updates.has_changed().unwrap_or(false) { continue; }
                 }
-                message=socket.recv()=> { if matches!(message,None|Some(Err(_))|Some(Ok(Message::Close(_)))) { break; } }
+                message = socket.recv() => {
+                    if matches!(message, None | Some(Err(_)) | Some(Ok(Message::Close(_)))) { break; }
+                    continue;
+                }
             }
+            if !state.sessions.lock().await.get(&session).is_some_and(|created| created.elapsed() < Duration::from_secs(3600)) { break; }
+            let snapshot = updates.borrow_and_update().clone();
+            initial = false;
+            let event = json!({"type":"runtime.snapshot","version":1,"sequence":snapshot.state.sequence,"payload":&*snapshot});
+            if !matches!(tokio::time::timeout(Duration::from_secs(3), socket.send(Message::Text(event.to_string().into()))).await, Ok(Ok(()))) { break; }
         }
     })
 }
@@ -265,7 +281,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     };
+    let mut app = app;
+    if let Some(worker) = app.discovery_worker() {
+        tokio::spawn(worker.run());
+    }
+    let updates = app.subscribe();
     let state = AppState {
+        updates,
+        cycle_stop: app.cycle_stop.clone(),
         kill: app.kill.clone(),
         app: Arc::new(Mutex::new(app)),
         owner_token: Arc::new(owner_token),
@@ -279,7 +302,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            if let Err(error) = timer.app.lock().await.tick().await {
+            if let Err(error) = timer.app.lock().await.scheduler_tick().await {
                 tracing::error!("Supervisor: {error}");
             }
         }

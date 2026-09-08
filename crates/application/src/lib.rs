@@ -1,8 +1,11 @@
+mod config;
 mod journal;
 pub mod models;
+pub mod pumpfun;
 pub mod services;
 #[cfg(test)]
 mod settlement_tests;
+mod upstream;
 use fs2::FileExt;
 use kairos_domain::{bps, money, RiskInput, RiskPolicy, TradingMode, USDC};
 use kairos_live::{now, vault, LiveExecutor};
@@ -26,6 +29,10 @@ fn id() -> String {
 }
 
 pub struct Application {
+    discovery: pumpfun::Adapter,
+    pub cycle_stop: Arc<AtomicBool>,
+    scheduled_cycle: bool,
+    updates: Option<tokio::sync::watch::Sender<Arc<Snapshot>>>,
     _runtime_lock: std::fs::File,
     db: Connection,
     directory: PathBuf,
@@ -76,6 +83,7 @@ impl Application {
         if state.schema_version != 1 {
             return Err("Unsupported runtime schema".into());
         }
+        state.pumpfun_config.validate()?;
         // Existing replay history remains archived, never relabelled as live market evidence.
         state.markets.clear();
         state.dry_markets.clear();
@@ -90,6 +98,8 @@ impl Application {
             }
         }
         state.agents = initial_agents(state.mode);
+        state.cycle_schedule.enabled = false;
+        state.cycle_schedule.next_run_at = None;
         state.live.public_key = vault::public_key(&directory.join("vault.json"));
         state.live.activation_expires_at = 0;
         state.live.unlocked = false;
@@ -101,6 +111,10 @@ impl Application {
         }
         let kill = Arc::new(AtomicBool::new(state.killed));
         let mut app = Self {
+            discovery: pumpfun::Adapter::new(state.pumpfun_config.clone()),
+            cycle_stop: Arc::new(AtomicBool::new(true)),
+            scheduled_cycle: false,
+            updates: None,
             _runtime_lock: runtime_lock,
             db,
             directory: directory.into(),
@@ -121,9 +135,28 @@ impl Application {
         app.persist(None)?;
         Ok(app)
     }
+    /// Observers read committed snapshots without acquiring the execution mutex.
+    pub fn subscribe(&mut self) -> tokio::sync::watch::Receiver<Arc<Snapshot>> {
+        if let Some(updates) = &self.updates {
+            return updates.subscribe();
+        }
+        let (sender, receiver) = tokio::sync::watch::channel(Arc::new(self.snapshot()));
+        self.updates = Some(sender);
+        receiver
+    }
+    fn publish(&self) {
+        if let Some(updates) = &self.updates {
+            updates.send_replace(Arc::new(self.snapshot()));
+        }
+    }
     #[cfg(feature = "test-support")]
     pub fn use_test_services(&mut self, base: &str) {
+        self.discovery.use_test_endpoint(base);
         self.services = Arc::new(Services::for_test(base));
+    }
+    /// Both hosts run one independent read-only discovery worker; the UI owns no feed or timer.
+    pub fn discovery_worker(&mut self) -> Option<pumpfun::Worker> {
+        self.discovery.take_worker()
     }
     fn scope(&self) -> String {
         if self.state.mode == TradingMode::DryRun {
@@ -152,6 +185,7 @@ impl Application {
             || kind.starts_with("position.")
             || kind.starts_with("risk.")
             || kind.starts_with("agent.")
+            || kind.starts_with("discovery.")
             || kind == "command.rejected"
         {
             let scope = self.scope();
@@ -159,6 +193,7 @@ impl Application {
                 "schema_version":1, "timezone":"Asia/Jakarta", "market_source":"Jupiter live market",
                 "event":self.state.events.last(),
                 "markets":self.state.markets, "market_slot":self.state.market_slot,
+                "pumpfun_config":self.state.pumpfun_config,
                 "quote":self.state.last_quote, "decision":self.state.last_decision,
                 "agents":if kind.starts_with("agent.") { Some(&self.state.agents) } else { None },
                 "policy":self.state.policy, "portfolio":if self.state.mode==TradingMode::Live && kind=="execution.reconciled" { None } else { Some(self.portfolio()) },
@@ -218,10 +253,13 @@ impl Application {
             self.kill.store(true, Ordering::SeqCst);
             self.state.killed = true;
             self.state.paused = true;
+            self.publish();
             return Err(error);
         }
         self.journal_error = None;
         self.journal_queue.clear();
+        self.discovery.configure(self.state.pumpfun_config.clone());
+        self.publish();
         Ok(())
     }
     pub fn portfolio(&self) -> Portfolio {
@@ -372,12 +410,15 @@ impl Application {
                 ),
             ]);
         }
+        let discovery = self.discovery.snapshot(&self.state.pumpfun_config);
+        readiness.push(row("Pump.fun discovery", "Optional analysis", if !self.state.pumpfun_config.enabled { "Disabled" } else if discovery.error.is_some() { "Degraded" } else if discovery.connected { "Ready" } else { "Connecting" }, discovery.error.as_deref().unwrap_or("Configure in Markets; PumpPortal events + DEX Screener metrics; memecoin execution unsupported")));
         readiness.extend([
             row("Live market feed", "Required", if self.state.market_error.is_some() { "Blocked" } else if self.state.markets.first().is_some_and(|m| now().saturating_sub(m.updated_at)<=30) { "Ready" } else { "Missing" }, self.state.market_error.as_deref().unwrap_or("Configure KAIROS_JUPITER_API_KEY and KAIROS_MARKET_RPC_URL on the Rust host")),
             row("AI decision provider", "Required for cycles", if self.services.ai_ready() { "Configured" } else { "Missing" }, "Set KAIROS_AI_URL, KAIROS_AI_MODEL and optional KAIROS_AI_API_KEY; decisions consume verified daily trade logs"),
             row("Daily trade journal", "Required", if self.journal_error.is_some() { "Blocked" } else { "Ready" }, &format!("{} / YYYY/MM/DD/*.json (Asia/Jakarta); SQLite outbox recovery",self.journal_root.display()))
         ]);
         Snapshot {
+            pumpfun: discovery,
             state: self.state.clone(),
             portfolio: self.portfolio(),
             readiness,
@@ -407,6 +448,9 @@ impl Application {
         if let Err(error) = &result {
             self.event("command.rejected", error, &command.request_id);
         }
+        if self.state.paused || self.state.killed {
+            self.stop_cycles();
+        }
         self.persist(Some((
             &command.request_id,
             result.as_ref().err().map(String::as_str),
@@ -415,6 +459,15 @@ impl Application {
     }
     async fn apply(&mut self, action: Action, correlation: &str) -> Result<(), String> {
         match action {
+            Action::ConfigurePumpfun { config } => {
+                config.validate()?;
+                self.state.pumpfun_config = config;
+                self.event(
+                    "discovery.configured",
+                    "Pump.fun discovery filters saved on the Rust host.",
+                    correlation,
+                );
+            }
             Action::CreateSession {
                 name,
                 starting_balance,
@@ -592,7 +645,66 @@ impl Application {
                 );
             }
             Action::RunCycle => {
+                if self.state.cycle_schedule.enabled {
+                    return Err("Stop automatic cycles before running a single cycle".into());
+                }
                 self.run_cycle(correlation).await?;
+            }
+            Action::ConfigureCycles { interval_seconds } => {
+                if !(60..=604_800).contains(&interval_seconds) || interval_seconds % 60 != 0 {
+                    return Err(
+                        "Cycle interval must be whole minutes between 1 minute and 168 hours"
+                            .into(),
+                    );
+                }
+                self.state.cycle_schedule.interval_seconds = interval_seconds;
+                if self.state.cycle_schedule.enabled {
+                    self.state.cycle_schedule.next_run_at = Some(now() + interval_seconds);
+                }
+                self.event("agent.schedule.configured", "Cycle interval saved on the Rust runtime; waiting period starts from this update.", correlation);
+            }
+            Action::StartCycles => {
+                if self.state.cycle_schedule.enabled {
+                    return Ok(());
+                }
+                if self.state.paused || self.state.killed {
+                    return Err(
+                        "Start or resume the session before starting automatic cycles".into(),
+                    );
+                }
+                if !self.services.market_ready() || !self.services.ai_ready() {
+                    return Err(
+                        "Configure live market and AI providers before starting automatic cycles"
+                            .into(),
+                    );
+                }
+                if self.state.mode == TradingMode::Live {
+                    self.require_live()?;
+                } else if self
+                    .state
+                    .session
+                    .as_ref()
+                    .is_none_or(|s| s.status != "Running")
+                {
+                    return Err("A running Dry Run session is required".into());
+                }
+                self.cycle_stop.store(false, Ordering::SeqCst);
+                self.state.cycle_schedule.enabled = true;
+                self.state.cycle_schedule.next_run_at = Some(now());
+                self.state.cycle_schedule.last_error = None;
+                self.event(
+                    "agent.schedule.started",
+                    "Automatic cycles started; next cycle is due now.",
+                    correlation,
+                );
+            }
+            Action::StopCycles => {
+                self.stop_cycles();
+                self.event(
+                    "agent.schedule.stopped",
+                    "Automatic cycles stopped. Position exit supervision remains active.",
+                    correlation,
+                );
             }
             Action::ApproveProposal { id } => {
                 self.approve(&id, correlation).await?;
@@ -807,12 +919,15 @@ impl Application {
             agent.status = "Waiting".into();
             agent.model = self.services.model.clone();
         }
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(75),
-            self.run_agent_cycle(correlation, &cycle),
-        )
-        .await
-        .unwrap_or_else(|_| Err("Agent cycle exceeded 75-second deadline".into()));
+        let timeout = self.services.cycle_timeout();
+        let result = tokio::time::timeout(timeout, self.run_agent_cycle(correlation, &cycle))
+            .await
+            .unwrap_or_else(|_| {
+                Err(format!(
+                    "Agent cycle exceeded {}-second deadline",
+                    timeout.as_secs()
+                ))
+            });
         if let Err(error) = &result {
             for agent in &mut self.state.agents {
                 if agent.status == "Running" {
@@ -829,6 +944,9 @@ impl Application {
         result
     }
     fn agent_started(&mut self, index: usize, correlation: &str) -> Result<(), String> {
+        if self.cycle_cancelled() {
+            return Err("Cycle stopped by operator".into());
+        }
         if self.kill.load(Ordering::SeqCst) {
             return Err("Agent cycle cancelled by kill switch".into());
         }
@@ -893,9 +1011,16 @@ impl Application {
         let mut timer = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
         timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
+            if self.cycle_cancelled() {
+                return Err("Cycle stopped by operator".into());
+            }
             tokio::select! {
-                result=&mut inference => return result,
+                result=&mut inference => {
+                    if self.cycle_cancelled() { return Err("Cycle stopped by operator".into()); }
+                    return result;
+                },
                 _=timer.tick()=> {
+                    if self.cycle_cancelled() { return Err("Cycle stopped by operator".into()); }
                     self.tick().await?;
                     if self.kill.load(Ordering::SeqCst) || self.state.paused { return Err("Agent cycle cancelled while supervising positions".into()); }
                 }
@@ -935,7 +1060,7 @@ impl Application {
             .filter(|p| p.mode == self.state.mode && p.scope_id == scope && p.status == "Open")
             .cloned()
             .collect();
-        let mut context = json!({"cycle_id":cycle,"mode":self.state.mode,"scope_id":scope,"market":self.state.markets,"market_slot":self.state.market_slot,"portfolio":self.portfolio(),"risk_policy":self.state.policy,"open_positions":positions,"trade_history":memory});
+        let mut context = json!({"cycle_id":cycle,"mode":self.state.mode,"scope_id":scope,"market":self.state.markets,"market_slot":self.state.market_slot,"portfolio":self.portfolio(),"risk_policy":self.state.policy,"open_positions":positions,"trade_history":memory,"pumpfun":self.discovery_context()});
         let services = self.services.clone();
         let input = context.clone();
         let orchestration = self
@@ -943,6 +1068,8 @@ impl Application {
             .await?;
         self.agent_completed(0, &orchestration, correlation)?;
         context["orchestration"] = json!(orchestration);
+        context["orchestration_pumpfun"] = context["pumpfun"].clone();
+        context["pumpfun"] = self.discovery_context();
         context["trade_history"] = json!(journal::memory(&self.db, &self.journal_root)?);
         self.agent_started(1, correlation)?;
         self.agent_started(2, correlation)?;
@@ -978,9 +1105,11 @@ impl Application {
             json!({"orchestrator":orchestration,"market_analyst":market,"onchain_analyst":onchain});
         context["analysis_market"] = context["market"].clone();
         context["analysis_onchain"] = context["onchain"].clone();
+        context["analysis_pumpfun"] = context["pumpfun"].clone();
         self.agent_started(3, correlation)?;
         // The final model sees fresh evidence as well as the snapshots its analysts used.
         self.refresh_market().await?;
+        context["pumpfun"] = self.discovery_context();
         context["market"] = json!(self.state.markets);
         context["market_slot"] = json!(self.state.market_slot);
         context["onchain"] = self.services.onchain(self.state.market_slot).await?;
@@ -997,6 +1126,9 @@ impl Application {
         let decision = self
             .supervise_inference(async move { services.decide(&input).await })
             .await?;
+        if self.cycle_cancelled() {
+            return Err("Cycle stopped by operator".into());
+        }
         if blocked && decision.action != DecisionAction::Hold {
             return Err("Strategy cannot override an agent block; HOLD required".into());
         }
@@ -1017,14 +1149,12 @@ impl Application {
                 if decision.position_id.is_none() && decision.notional_usdc == Decimal::ZERO => {}
             _ => return Err("AI decision violates position scope or risk bounds".into()),
         }
-        if now().saturating_sub(
+        let input_age_seconds = now().saturating_sub(
             context["market"][0]["updated_at"]
                 .as_u64()
                 .unwrap_or_default(),
-        ) > 30
-        {
-            return Err("Strategy input expired during inference".into());
-        }
+        );
+        decision.action.validate_input_age(input_age_seconds)?;
         // Model latency cannot make stale evidence eligible for approval.
         if self.kill.load(Ordering::SeqCst)
             || self.state.paused
@@ -1044,7 +1174,7 @@ impl Application {
             .map(|r| r["event"]["id"].clone())
             .collect();
         self.state.last_decision = Some(
-            json!({"id":cycle,"model":self.services.model,"received_at":now(),"memory_event_ids":memory_ids,"agent_reports":context["agent_reports"],"analysis_market":context["analysis_market"],"analysis_onchain":context["analysis_onchain"],"onchain":context["onchain"],"result":decision}),
+            json!({"id":cycle,"model":self.services.model,"received_at":now(),"input_age_seconds":input_age_seconds,"input_expired":input_age_seconds > 30,"memory_event_ids":memory_ids,"agent_reports":context["agent_reports"],"analysis_market":context["analysis_market"],"analysis_onchain":context["analysis_onchain"],"orchestration_pumpfun":context["orchestration_pumpfun"],"analysis_pumpfun":context["analysis_pumpfun"],"pumpfun":context["pumpfun"],"onchain":context["onchain"],"result":decision}),
         );
         self.agent_completed(3, &decision, correlation)?;
         if decision.action != DecisionAction::Hold {
@@ -1075,6 +1205,20 @@ impl Application {
         }
         self.event("agent.cycle.completed",if decision.action==DecisionAction::Hold { "AI chose HOLD after evaluating live market and trade memory." } else { "AI proposal created from live market and verified daily trade memory; owner approval required." },correlation);
         Ok(())
+    }
+    fn discovery_context(&self) -> Value {
+        let discovery = self.discovery.snapshot(&self.state.pumpfun_config);
+        json!({
+            "source":"PumpPortal token creation/migration + DEX Screener pair metrics",
+            "config":self.state.pumpfun_config,
+            "connected":discovery.connected,"error":discovery.error,
+            "last_event_at":discovery.last_event_at,"last_refresh_at":discovery.last_refresh_at,
+            "tracked":discovery.tracked,
+            "candidates":discovery.candidates.iter().filter(|c| c.matches_filters).take(5).collect::<Vec<_>>(),
+            "excluded_candidates":discovery.candidates.iter().filter(|c| !c.matches_filters).take(3).collect::<Vec<_>>(),
+            "execution_supported":false,
+            "limitations":["Read-only memecoin discovery; execution remains SOL/USDC only", "1h price change is a momentum proxy, not realized volatility", "Metrics are provider-reported and may include wash trading; not an audit", "DEX Screener does not supply per-metric timestamps; freshness measures fetch age", "Memecoin mint/freeze authorities, holders and pool security have not been checked", "Rolling window of at most 300 observed tokens; at most 5 screened and 3 excluded candidates in AI context; no historical backfill"]
+        })
     }
     async fn refresh_market(&mut self) -> Result<(), String> {
         let (price, slot) = match self.services.market().await {
@@ -1557,6 +1701,53 @@ impl Application {
         self.persist(None)?;
         Ok(())
     }
+    fn cycle_cancelled(&self) -> bool {
+        self.scheduled_cycle && self.cycle_stop.load(Ordering::SeqCst)
+    }
+    fn stop_cycles(&mut self) {
+        self.cycle_stop.store(true, Ordering::SeqCst);
+        self.state.cycle_schedule.enabled = false;
+        self.state.cycle_schedule.next_run_at = None;
+    }
+    /// Hosts call this; inference calls tick() only, so cycles cannot nest or overlap.
+    pub async fn scheduler_tick(&mut self) -> Result<(), String> {
+        let supervision = self.tick().await;
+        if self.state.paused || self.state.killed || self.cycle_stop.load(Ordering::SeqCst) {
+            if self.state.cycle_schedule.enabled || self.state.cycle_schedule.next_run_at.is_some()
+            {
+                self.stop_cycles();
+                self.persist(None)?;
+            }
+            return supervision;
+        }
+        if !self.state.cycle_schedule.enabled
+            || self
+                .state
+                .cycle_schedule
+                .next_run_at
+                .is_none_or(|at| at > now())
+        {
+            return supervision;
+        }
+        self.state.cycle_schedule.next_run_at = None;
+        self.scheduled_cycle = true;
+        let result = self.run_cycle(&id()).await;
+        self.scheduled_cycle = false;
+        if self.cycle_stop.load(Ordering::SeqCst) || self.state.killed || self.state.paused {
+            self.stop_cycles();
+        } else {
+            self.state.cycle_schedule.last_error = result.as_ref().err().cloned();
+            self.state.cycle_schedule.next_run_at =
+                Some(now() + self.state.cycle_schedule.interval_seconds);
+            self.event(
+                "agent.schedule.waiting",
+                "Cycle finished; waiting for the configured interval before the next attempt.",
+                "scheduler",
+            );
+        }
+        self.persist(None)?;
+        result
+    }
     /// Bounded host timer. Pausing entries never suspends deterministic exit checks.
     pub async fn tick(&mut self) -> Result<(), String> {
         for proposal in &mut self.state.proposals {
@@ -1675,6 +1866,8 @@ fn initial_agents(_mode: TradingMode) -> Vec<AgentRun> {
 }
 fn initial_state() -> RuntimeState {
     RuntimeState {
+        pumpfun_config: pumpfun::Config::default(),
+        cycle_schedule: CycleSchedule::default(),
         dry_markets: Vec::new(),
         market_error: None,
         market_slot: 0,

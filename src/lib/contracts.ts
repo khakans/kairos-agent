@@ -99,7 +99,53 @@ const eventSchema = z.object({
   message: z.string(),
   correlation_id: z.string(),
 });
+const pumpfunConfigSchema = z.object({
+  enabled: z.boolean(),
+  max_pair_age_hours: z.number().int(),
+  min_liquidity_usd: amount,
+  min_volume_h1_usd: amount,
+  min_abs_change_h1_pct: amount,
+});
 export const snapshotSchema = z.object({
+  pumpfun_config: pumpfunConfigSchema,
+  pumpfun: z.object({
+    connected: z.boolean(),
+    last_event_at: z.number().nullable(),
+    last_refresh_at: z.number().nullable(),
+    error: z.string().nullable(),
+    tracked: z.number(),
+    matching: z.number(),
+    candidates: z.array(
+      z.object({
+        mint: z.string(),
+        name: z.string(),
+        symbol: z.string(),
+        event: z.string(),
+        first_seen_at: z.number(),
+        mayhem: z.boolean(),
+        matches_filters: z.boolean(),
+        reasons: z.array(z.string()),
+        pair: z
+          .object({
+            address: z.string(),
+            dex: z.string(),
+            created_at: z.number(),
+            price_usd: amount,
+            liquidity_usd: amount.nullable(),
+            volume_h1_usd: amount,
+            change_h1_pct: amount,
+            checked_at: z.number(),
+          })
+          .nullable(),
+      }),
+    ),
+  }),
+  cycle_schedule: z.object({
+    enabled: z.boolean(),
+    interval_seconds: z.number(),
+    next_run_at: z.number().nullable(),
+    last_error: z.string().nullable(),
+  }),
   schema_version: z.literal(1),
   market_error: z.string().nullable(),
   market_slot: z.number(),
@@ -184,11 +230,15 @@ export type Action =
         | "reset_session"
         | "kill"
         | "run_cycle"
+        | "start_cycles"
+        | "stop_cycles"
         | "lock_wallet"
         | "refresh_wallet"
         | "reconcile";
     }
   | { action: "set_mode"; mode: Mode }
+  | { action: "configure_cycles"; interval_seconds: number }
+  | { action: "configure_pumpfun"; config: z.infer<typeof pumpfunConfigSchema> }
   | {
       action: "approve_proposal" | "reject_proposal" | "close_position";
       id: string;

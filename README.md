@@ -1,4 +1,4 @@
-# Kairos Agent
+# Kairos
 
 Command center Solana dengan dua mode: **Dry Run** dan **Live**. React/TypeScript menggunakan atomic design; domain, policy, ledger, dan execution berada di Rust bersama untuk Tauri dan Axum.
 
@@ -37,7 +37,7 @@ Desktop menggunakan IPC langsung ke core dan data directory aplikasi OS (`com.ka
 ## Dry Run
 
 1. Klik **New dry run**, isi nama, virtual capital, fee dan slippage.
-2. Klik **Start session**, lalu **Run cycle**.
+2. Klik **Start session**, atur interval menit/jam dan **Save interval**, lalu **Start cycles**. **Run once** tetap tersedia untuk satu evaluasi manual.
 3. Periksa proposal; **Approve simulation** melewati risk engine sebelum virtual fill.
 4. Posisi dapat ditutup manual atau oleh TP/SL/trailing/time-stop supervisor.
 5. **Pause** menghentikan entry, tetapi supervisor posisi tetap berjalan. **Kill** membatalkan proposal dan mengunci entry.
@@ -49,7 +49,7 @@ Session replay dari versi lama dipertahankan sebagai histori dan dihentikan. Gun
 
 ### Koneksi market dan AI untuk kedua mode
 
-Atur environment pada host Rust sebelum menjalankan server atau Tauri. Konfigurasi tidak disimpan di browser atau trade log. Lihat [.env.example](.env.example). Docker Compose membaca `.env`; server/Tauri membaca environment proses, bukan file `.env` secara otomatis.
+Isi konfigurasi provider di `.env` berdasarkan [.env.example](.env.example), lalu restart server/Tauri. Rust membaca `.env` terdekat dari working directory atau parent-nya (termasuk root proyek saat Tauri berjalan dari `src-tauri`). Jika tidak ditemukan, Rust mencari `.env` di samping executable. Environment proses tetap diprioritaskan. Konfigurasi provider tidak dikirim ke browser atau trade log, dan `.env` tidak dibundel ke executable. Docker Compose tetap membaca `.env` melalui konfigurasi Compose.
 
 | Variabel | Isi |
 |---|---|
@@ -61,7 +61,19 @@ Atur environment pada host Rust sebelum menjalankan server atau Tauri. Konfigura
 
 Restart runtime setelah konfigurasi. **Adapters** menampilkan status koneksi; feed dipoll setiap lima detik di kedua mode, termasuk sebelum wallet Live di-unlock. **Run cycle** memanggil model sungguhan dengan pasar, posisi, policy, dan histori trade. Model dapat memilih **open**, **close**, atau **hold**. Open/close menghasilkan proposal yang memerlukan approval owner. Supervisor TP/SL/trailing/time-stop tetap deterministik. Ketiadaan konfigurasi, provider error, data stale, JSON invalid, atau keputusan di luar batas risk tidak diganti respons dummy.
 
+Uji koneksi aktual dengan `cargo run -p kairos-application --example market_smoke` dari root proyek. Diagnostic ini membaca provider `.env`, memeriksa harga, quote beli/jual, mint mainnet, feed kedua mode, dan empat agent jika AI dikonfigurasi. Proposal AI yang muncul hanya dieksekusi secara virtual lalu ditutup; keputusan hold tetap dihormati. Data dan log diagnostic disimpan terpisah di `.smoke-data-actual-<uuid>/`. Tidak ada wallet dibuat atau transaksi on-chain dikirim. Validasi cluster memakai [genesis hash lengkap Solana mainnet](https://github.com/solana-labs/solana/blob/master/sdk/src/genesis_config.rs).
+
+Pembacaan Jupiter/RPC memakai maksimal tiga percobaan dalam budget total delapan detik per request, dengan jeda 300/600 ms dan penghormatan `Retry-After`. Retry terbatas pada gangguan koneksi/body, HTTP 408/429/500/502/503/504, serta RPC node unhealthy/minimum context slot belum tercapai. Error autentikasi, JSON invalid, dan pelanggaran validasi tidak diulang. Price/genesis/slot dibaca paralel; batas freshness harga 15 detik/64 slot tetap berlaku. Tidak ada retry baru pada signing/submission Live.
+
+Orchestrator dan kedua analyst memakai `KAIROS_AI_ANALYST_TIMEOUT_SECONDS` (default 45 detik; rentang 5?300). Deadline cycle mengikuti dua tahap analyst ditambah budget Strategy dan 35 detik overhead. Strategy memakai `KAIROS_AI_STRATEGY_TIMEOUT_SECONDS` (default 25 detik; rentang 5?300). Usulan open/close tetap mensyaratkan input berumur maksimal 30 detik saat inferensi selesai; HOLD yang lambat dicatat beserta umur input tanpa membuat proposal. Request AI tidak otomatis diulang; supervisor posisi tetap berjalan selama inferensi. Error menyebut layanan, tahap kegagalan, jumlah percobaan, dan budget tanpa menampilkan URL/key atau pesan mentah provider. Untuk 12 sampel feed aktual berjarak lima detik: `cargo run -p kairos-application --example market_smoke -- --repeat-feed`.
+
 ### Log harian dan memori AI
+
+**Automatic cycles dikelola sepenuhnya oleh Rust**, untuk server dan Tauri. `cycle_schedule` (interval, status enabled, waktu cycle berikutnya, dan error terakhir) disimpan di SQLite dan dikirim dalam snapshot. UI hanya mengirim `configure_cycles`, `start_cycles`, atau `stop_cycles`; timer UI hanya menampilkan countdown. Default jeda lima menit, dapat diatur dari satu menit sampai 168 jam. Cycle pertama dijadwalkan segera (polling runtime lima detik); cycle berikutnya dijadwalkan setelah cycle sebelumnya selesai ditambah interval. Tidak ada overlap/catch-up. Kegagalan provider menunggu interval yang sama sebelum percobaan cycle berikutnya.
+
+**Stop cycles** membatalkan analisis yang sedang berjalan melalui sinyal Rust dan meniadakan jadwal berikutnya; supervisor exit posisi tetap aktif. Save interval saat menunggu menghitung ulang jadwal dari waktu konfigurasi disimpan. Pause, Kill, pergantian mode, dan berhentinya sesi menonaktifkan loop. Reload/menutup halaman web tidak menghentikan scheduler selama server masih hidup. Restart proses mempertahankan interval tetapi memerlukan Start lagi, mengikuti aturan runtime yang selalu mulai dalam keadaan paused. Approval proposal dan otorisasi Live tetap mengikuti aturan sebelumnya.
+
+Saat cycle berjalan, banner lifecycle menampilkan tahap Orchestrator, analisis paralel, dan Decision, timer elapsed, serta jumlah agent yang benar-benar selesai. Kartu agent aktif memiliki spinner dan highlight; status Waiting, Complete, Failed, dan Skipped mengikuti snapshot Rust. Animasi menghormati `prefers-reduced-motion`. Snapshot dikirim setelah persist melalui watch channel, WebSocket server atau event Tauri, sehingga pembacaan progres tidak menunggu mutex eksekusi. Reload halaman menyambung kembali ke progres terbaru dan tidak membatalkan command yang sudah diterima. Kill switch tetap tersedia untuk menghentikan aktivitas sesuai batas runtime.
 
 Empat agent aktif dalam satu siklus, masing-masing dengan prompt, pemanggilan model, hasil, status, dan cycle ID yang dapat ditelusuri:
 
@@ -70,7 +82,7 @@ Empat agent aktif dalam satu siklus, masing-masing dengan prompt, pemanggilan mo
 3. **On-chain Analyst** membaca mint WSOL/USDC dari RPC mainnet (`getMultipleAccounts`, confirmed, jsonParsed): token program, initialization, decimals, supply, mint/freeze authority, dan source slot. Data ini bukan audit lengkap holder, pool, atau wallet flow; informasi yang belum diambil dinyatakan sebagai batas analisis.
 4. **Strategy & Evaluation** menyatukan tiga laporan dan evidence terbaru untuk open/close/hold. Keputusan yang mengabaikan assessment `block` ditolak oleh Rust.
 
-Kedua analyst berjalan paralel setelah Orchestrator; Strategy berjalan setelah keduanya berhasil. Kegagalan/schema invalid menandai agent terkait Failed dan tahap yang bergantung padanya Skipped, tanpa proposal baru. Seluruh siklus dibatasi 75 detik; pasar diperbarui sebelum analisis dan sintesis akhir, lalu freshness/risk tetap dicek sebelum eksekusi. Semua peran memakai konfigurasi provider/model `KAIROS_AI_*` yang sama, dengan **empat request inference terpisah per siklus**. Tidak ada fallback fixture dalam runtime normal. Kontrak pembacaan mint mengikuti [Solana getMultipleAccounts](https://solana.com/docs/rpc/http/getmultipleaccounts).
+Kedua analyst berjalan paralel setelah Orchestrator; Strategy berjalan setelah keduanya berhasil. Kegagalan/schema invalid menandai agent terkait Failed dan tahap yang bergantung padanya Skipped, tanpa proposal baru. Seluruh siklus dibatasi 150 detik; pasar diperbarui sebelum analisis dan sintesis akhir, lalu freshness/risk tetap dicek sebelum eksekusi. Semua peran memakai konfigurasi provider/model `KAIROS_AI_*` yang sama, dengan **empat request inference terpisah per siklus**. Tidak ada fallback fixture dalam runtime normal. Kontrak pembacaan mint mengikuti [Solana getMultipleAccounts](https://solana.com/docs/rpc/http/getmultipleaccounts).
 
 Default server menyimpan log di **`.kairos-data/trade-log/YYYY/MM/DD/<event-uuid>.json`**; jika `KAIROS_DATA_DIR` diubah, folder mengikuti data directory tersebut. Desktop memakai `<app_data_dir>/trade-log/`; Docker `/data/trade-log/`. Tanggal folder mengikuti **Asia/Jakarta (UTC+7)**, sedangkan timestamp event adalah Unix UTC. Path aktif terlihat di Adapters.
 
@@ -144,6 +156,53 @@ npm.cmd run smoke
 
 Smoke test memakai Google Chrome terinstal pada Windows; pada mesin lain jalankan `npx playwright install chromium`. Test membuat data directory terisolasi `.smoke-data-*`, memakai server HTTP upstream khusus pengujian, dan tidak membaca wallet pengguna. Endpoint Jupiter runtime normal tidak dapat dioverride oleh `KAIROS_TEST_UPSTREAM`: override hanya dikompilasi dengan feature `test-support`. Build deployment tanpa feature tersebut. Lihat [hasil smoke test](SMOKE_TEST.md). Screenshots/trace ada di `test-results` dan `playwright-report`.
 
+## Local LLM dengan LM Studio
+
+Kairos memakai endpoint [Chat Completions dan structured JSON output LM Studio](https://lmstudio.ai/docs/developer/openai-compat/structured-output). Jalankan model dan server lokal:
+
+```powershell
+lms runtime get llama.cpp:vulkan -y
+lms runtime select llama.cpp-win-x86_64-vulkan-avx2@2.33.0
+lms load qwen/qwen3-8b --context-length 16384 --parallel 2 --gpu max --identifier qwen/qwen3-8b --yes
+lms server start --port 1234
+```
+
+Gunakan ID dari `lms ps` atau `GET /v1/models`, bukan URL halaman model. Isi `.env` pada direktori Kairos:
+
+```dotenv
+KAIROS_AI_URL=http://127.0.0.1:1234/v1/chat/completions
+KAIROS_AI_MODEL=qwen/qwen3-8b
+KAIROS_AI_API_KEY=<token lokal LM Studio jika authentication aktif>
+KAIROS_AI_RESPONSE_FORMAT=json_schema
+KAIROS_AI_REASONING_EFFORT=none
+KAIROS_AI_ANALYST_TIMEOUT_SECONDS=120
+KAIROS_AI_STRATEGY_TIMEOUT_SECONDS=120
+```
+
+Contoh memakai model Qwen 8B yang sudah tersedia di mesin ini; sesuaikan ID dengan model yang diunduh di LM Studio. `none` meminta respons tanpa reasoning tambahan; pilih nilai lain hanya jika model/provider mendukungnya dan memenuhi deadline. Dua analyst tetap berjalan paralel. Contoh memberi setiap request 120 detik dan cycle 395 detik. Timeout analyst dan Strategy dapat diubah di `.env` (5?300 detik), dibaca oleh Rust saat restart; UI hanya menerima status dan mengirim aksi. Open/close tetap ditolak jika input Strategy berumur lebih dari 30 detik; HOLD boleh selesai lebih lama, tanpa proposal, dan log menyimpan `input_age_seconds`/`input_expired`. Jangan jalankan diagnostik bersamaan dengan cycle aplikasi karena keduanya memakai model yang sama. Konfigurasi ini diuji pada Windows dengan AMD Radeon 8060S: Qwen3 8B, Vulkan 2.33.0, context 16K, parallel 2, reasoning `none` dan `json_schema`. Runtime ROCm yang sebelumnya dipilih menghasilkan respons kosong/tidak valid atau request tersendat pada pengujian mesin ini. Untuk perangkat lain pilih runtime yang sesuai. JSON schema mengontrol bentuk output, dan Rust tetap memvalidasi ukuran field, nominal, posisi, serta risk policy. Mode `text` tersedia untuk provider yang membutuhkan JSON melalui prompt saja, tetapi tetap ditolak jika output tidak valid. `json_object` menghasilkan HTTP 400 pada LM Studio yang diuji. Respons yang terpotong karena token limit ditolak. Provider lama tetap memakai `json_object` jika `KAIROS_AI_RESPONSE_FORMAT` kosong; reasoning tidak dikirim jika konfigurasinya kosong.
+
+Biarkan server LM Studio aktif ketika Kairos digunakan. Rebuild/restart Kairos setelah mengganti konfigurasi provider. Uji seluruh empat agent memakai market aktual tanpa menyetujui proposal atau mengeksekusi trade:
+
+```powershell
+cargo run -p kairos-application --example market_smoke --locked -- --analysis-only
+```
+
+## Pump.fun discovery
+
+Buka **Markets > Pump.fun discovery**, atur filter, klik **Save discovery filters**, lalu **Enable discovery**. Konfigurasi disimpan Rust di SQLite dan berlaku pada Dry Run maupun Live. Worker Rust menerima event creation/migration dari [PumpPortal](https://pumpportal.fun/data-api/real-time/) melalui satu WebSocket dengan heartbeat dan reconnect, lalu mengambil metrik pair dari [DEX Screener](https://docs.dexscreener.com/api/reference). Tidak memerlukan key/wallet PumpPortal; tidak menggunakan subscription trade berbayar. Discovery yang diaktifkan berlanjut setelah reload UI atau restart host, sedangkan trading tetap mengikuti Start/Stop cycles dan otorisasi yang sudah ada.
+
+Default filter: umur pair maksimum 24 jam, likuiditas minimum $10.000, volume 1 jam minimum $10.000, dan nilai absolut perubahan harga 1 jam minimum 5%. Semua filter harus terpenuhi. Rentang umur yang diizinkan 1–168 jam. Perubahan harga adalah indikator pergerakan, bukan realized volatility. Pair bonding curve sering tidak menyediakan likuiditas: harga/volume tetap ditampilkan, likuiditas menjadi **Unknown**, dan kandidat tidak lolos filter. Cadangan virtual bonding curve tidak dianggap likuiditas pool.
+
+Window discovery dibatasi 300 token yang diamati sejak koneksi aktif, tanpa historical backfill. UI menampilkan maksimum 30; konteks keempat agent mencakup maksimum 5 kandidat yang lolos dan 3 kandidat yang dikecualikan beserta alasannya. Poll metrik setiap 15 detik dalam batch maksimal 30 mint; evidence kedaluwarsa setelah 90 detik sejak fetch. DEX Screener tidak menyediakan timestamp tiap metrik, sehingga fetch baru bukan bukti setiap transaksi baru sudah terindeks. Token Mayhem, pair dari venue/chain lain, data tidak lengkap, koneksi putus, atau metrik gagal tidak lolos. Screening ini bukan audit mint/freeze authority, holders, keaslian volume atau keamanan pool.
+
+Keempat agent membaca discovery sebagai evidence tidak tepercaya sesuai perannya. Snapshot yang dipakai analis dan strategi disimpan bersama hasil keputusan di `trade-log/YYYY/MM/DD/*.json`, dan ikut dalam trade memory pada outcome yang terkait. **Adapter ini mencakup discovery dan analisis; eksekusi memecoin belum didukung.** Eksekusi dry/live tetap SOL/USDC, dengan rute live Orca Whirlpool yang tervalidasi. Tidak ada transaksi Pump.fun/PumpSwap yang ditandatangani atau dikirim.
+
+Diagnostic feed aktual (read-only, tanpa transaksi atau pemanggilan AI):
+
+```powershell
+cargo run -p kairos-application --example pumpfun_smoke --locked
+```
+
 ## Struktur
 
 ```text
@@ -164,3 +223,10 @@ src-tauri                  Tauri IPC host
 Domain tidak mengimpor React, Tauri, Axum, provider API atau database. UI tidak mengubah saldo dan tidak membangun transaction bytes. Dependency lockfiles disertakan bersama kode. Button mengikuti komposisi shadcn/ui dengan semantic CSS; dialog menggunakan Radix untuk focus trap, Escape, dan restoration. Font disajikan lokal tanpa CDN.
 
 Referensi implementasi: [Jupiter V2 build](https://developers.jup.ag/docs/swap/build), [Jupiter Price V3](https://developers.jup.ag/docs/price), [Tauri commands](https://v2.tauri.app/develop/calling-rust/), [Axum WebSocket](https://docs.rs/axum/latest/axum/extract/ws/).
+
+
+## Brand assets
+
+Artwork asli berada di `public/brand/kairos-wordmark.png` dan `public/brand/kairos-mark.png`. Atom `BrandLogo` dipakai oleh login, sidebar, dan identitas workspace; viewport hanya menyembunyikan margin transparan tanpa mengubah artwork. Ikon desktop Windows/macOS/Appx dibuat dari simbol K dengan Tauri CLI. Identitas aplikasi tampil sebagai **Kairos**; identifier penyimpanan tetap `com.kairosagent.desktop` agar data runtime tetap terbaca.
+
+Untuk regenerasi ikon, jalankan `npm run tauri -- icon public/brand/kairos-mark.png --output target/brand-icons`, salin file desktop yang diperlukan ke `src-tauri/icons`, `32x32.png` ke `public/brand/favicon-32.png`, dan `icon.ico` ke `public/favicon.ico`.

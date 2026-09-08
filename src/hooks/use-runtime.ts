@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { desktop, getSnapshot, sendCommand } from "../lib/api";
-import { snapshotSchema } from "../lib/contracts";
+import { snapshotSchema, type Snapshot } from "../lib/contracts";
 
 export function useRuntime() {
   const client = useQueryClient();
@@ -14,11 +14,17 @@ export function useRuntime() {
     queryFn: getSnapshot,
     refetchInterval: 5000,
     retry: false,
+    structuralSharing: (previous, next) =>
+      previous && (previous as Snapshot).sequence > (next as Snapshot).sequence
+        ? previous
+        : next,
   });
   const mutation = useMutation({
     mutationFn: sendCommand,
     onSuccess: (snapshot) => {
-      client.setQueryData(["runtime"], snapshot);
+      client.setQueryData<Snapshot>(["runtime"], (previous) =>
+        previous && previous.sequence > snapshot.sequence ? previous : snapshot,
+      );
       setNotice({
         text: "Command completed and recorded in audit log.",
         error: false,
@@ -37,7 +43,12 @@ export function useRuntime() {
     let unlisten: (() => void) | undefined;
     const receive = (payload: unknown) => {
       const parsed = snapshotSchema.safeParse(payload);
-      if (parsed.success) client.setQueryData(["runtime"], parsed.data);
+      if (parsed.success)
+        client.setQueryData<Snapshot>(["runtime"], (previous) =>
+          previous && previous.sequence > parsed.data.sequence
+            ? previous
+            : parsed.data,
+        );
     };
     const connect = () => {
       socket = new WebSocket(
@@ -73,7 +84,18 @@ export function useRuntime() {
   return {
     ...query,
     command: mutation.mutateAsync,
-    busy: mutation.isPending,
+    busy:
+      mutation.isPending ||
+      Boolean(
+        query.data?.agents.some((a) =>
+          ["Running", "Waiting"].includes(a.status),
+        ),
+      ),
+    cyclePending:
+      mutation.isPending && mutation.variables?.action === "run_cycle",
+    submittedAt: mutation.submittedAt,
+    stoppingCycles:
+      mutation.isPending && mutation.variables?.action === "stop_cycles",
     notice,
     clearNotice: () => setNotice(null),
   };

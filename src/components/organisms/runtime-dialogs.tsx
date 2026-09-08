@@ -56,7 +56,7 @@ export function RuntimeDialogs({
   );
   if (!dialog) return null;
   if (typeof dialog === "object" && "agent" in dialog) {
-    const agent = dialog.agent;
+    const agent = snapshot.agents.find((a) => a.id === dialog.agent.id) ?? dialog.agent;
     return (
       <Modal
         open

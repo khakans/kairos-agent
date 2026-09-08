@@ -1,10 +1,10 @@
 import { useState, type FormEvent } from "react";
 import {
-  Command,
   LoaderCircle,
   Pause,
   Play,
   Plus,
+  Square,
   ShieldAlert,
   X,
 } from "lucide-react";
@@ -13,6 +13,7 @@ import { ApiError, login } from "./lib/api";
 import { useRuntime } from "./hooks/use-runtime";
 import { Button } from "./components/atoms/button";
 import { Badge } from "./components/atoms/badge";
+import { BrandLogo } from "./components/atoms/brand-logo";
 import { Field } from "./components/molecules/field";
 import { CommandLayout } from "./components/templates/command-layout";
 import {
@@ -20,6 +21,8 @@ import {
   type DialogState,
 } from "./components/organisms/runtime-dialogs";
 import { Overview } from "./pages/overview";
+import { CycleProgress } from "./components/organisms/cycle-progress";
+import { CycleControls } from "./components/organisms/cycle-controls";
 import { WorkspacePage } from "./pages/workspace-page";
 import "./App.css";
 
@@ -53,7 +56,7 @@ export default function App() {
       <div className="welcome-screen">
         <div className="welcome-art">
           <span className="welcome-brand">
-            <Command size={24} /> kairos<span>agent</span>
+            <BrandLogo />
           </span>
           <div>
             <span className="eyebrow">BUILT FOR DELIBERATE EXECUTION</span>
@@ -123,6 +126,9 @@ export default function App() {
   }
   const snapshot = runtime.data;
   const dry = snapshot.mode === "DRY_RUN";
+  const cycling =
+    runtime.cyclePending ||
+    snapshot.agents.some((a) => ["Running", "Waiting"].includes(a.status));
   const act = (action: Action) => {
     void runtime.command(action).catch(() => {});
   };
@@ -170,7 +176,16 @@ export default function App() {
             {snapshot.paused ? <Play size={14} /> : <Pause size={14} />}{" "}
             {snapshot.paused ? "Resume" : "Pause"}
           </Button>
-          {dry ? (
+          {snapshot.cycle_schedule.enabled ? (
+            <Button
+              variant="outline"
+              onClick={() => act({ action: "stop_cycles" })}
+              disabled={runtime.stoppingCycles}
+            >
+              <Square size={14} />
+              {runtime.stoppingCycles ? "Stopping cycles…" : "Stop cycles"}
+            </Button>
+          ) : dry ? (
             !snapshot.session || snapshot.session.status === "Stopped" ? (
               <Button
                 disabled={runtime.busy}
@@ -190,10 +205,14 @@ export default function App() {
             ) : (
               <Button
                 disabled={runtime.busy || snapshot.paused || snapshot.killed}
-                onClick={() => act({ action: "run_cycle" })}
+                onClick={() => act({ action: "start_cycles" })}
               >
-                <Play size={14} />
-                Run cycle
+                {cycling ? (
+                  <LoaderCircle size={14} className="spin" />
+                ) : (
+                  <Play size={14} />
+                )}
+                {cycling ? "Running cycle…" : "Start cycles"}
               </Button>
             )
           ) : (
@@ -201,7 +220,7 @@ export default function App() {
               disabled={runtime.busy}
               onClick={() =>
                 snapshot.capabilities.signing_enabled
-                  ? act({ action: "run_cycle" })
+                  ? act({ action: "start_cycles" })
                   : setDialog(
                       !snapshot.live.public_key
                         ? "configure"
@@ -211,13 +230,16 @@ export default function App() {
                     )
               }
             >
-              {snapshot.capabilities.signing_enabled
-                ? "Run live cycle"
-                : !snapshot.live.public_key
-                  ? "Set up live"
-                  : !snapshot.live.unlocked
-                    ? "Unlock wallet"
-                    : "Activate live"}
+              {cycling && <LoaderCircle size={14} className="spin" />}
+              {cycling
+                ? "Running cycle…"
+                : snapshot.capabilities.signing_enabled
+                  ? "Start live cycles"
+                  : !snapshot.live.public_key
+                    ? "Set up live"
+                    : !snapshot.live.unlocked
+                      ? "Unlock wallet"
+                      : "Activate live"}
             </Button>
           )}
           <Button
@@ -253,6 +275,12 @@ export default function App() {
           </button>
         </div>
       )}
+      <CycleControls snapshot={snapshot} busy={runtime.busy} command={act} />
+      <CycleProgress
+        snapshot={snapshot}
+        pending={runtime.cyclePending}
+        submittedAt={runtime.submittedAt}
+      />
       {page === "Overview" ? (
         <Overview {...actionProps} onNavigate={setPage} />
       ) : (

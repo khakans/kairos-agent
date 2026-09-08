@@ -70,7 +70,7 @@ async fn rpc(
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, StatusCode> {
     let result = match body["method"].as_str() {
-        Some("getGenesisHash") => json!("5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"),
+        Some("getGenesisHash") => json!("5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"),
         Some("getSlot") => json!(1_000_000),
         Some("getMultipleAccounts") => {
             json!({"context":{"slot":1_000_000},"value":([9,6].map(|decimals|json!({"owner":"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA","data":{"parsed":{"type":"mint","info":{"isInitialized":!control.invalid_mint.load(Ordering::SeqCst),"decimals":decimals,"supply":"1000000","mintAuthority":null,"freezeAuthority":null}}}})))})

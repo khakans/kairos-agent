@@ -26,6 +26,7 @@ import { EmptyState, Panel } from "../components/molecules/panel";
 import { ActivityFeed } from "../components/organisms/activity-feed";
 import { AgentField } from "../components/organisms/agent-field";
 import { MarketPanel } from "../components/organisms/market-panel";
+import { PumpfunDiscovery } from "../components/organisms/pumpfun-discovery";
 import { PositionsTable } from "../components/organisms/positions-table";
 import type { DialogState } from "../components/organisms/runtime-dialogs";
 
@@ -76,6 +77,7 @@ export function WorkspacePage({
   if (page === "Markets")
     return (
       <>
+        <PumpfunDiscovery snapshot={snapshot} command={command} busy={busy} />
         <MarketPanel markets={snapshot.markets} />
         <Panel title="Market universe">
           <div className="table-scroll">
@@ -142,10 +144,22 @@ export function WorkspacePage({
         title="Trade proposals"
         action={
           <Button
-            disabled={busy || snapshot.paused || snapshot.killed}
-            onClick={() => command({ action: "run_cycle" })}
+            disabled={
+              snapshot.cycle_schedule.enabled
+                ? false
+                : busy || snapshot.paused || snapshot.killed
+            }
+            onClick={() =>
+              command({
+                action: snapshot.cycle_schedule.enabled
+                  ? "stop_cycles"
+                  : "start_cycles",
+              })
+            }
           >
-            Run cycle
+            {snapshot.cycle_schedule.enabled
+              ? "Stop automatic cycles"
+              : "Start automatic cycles"}
           </Button>
         }
       >
@@ -548,8 +562,8 @@ export function WorkspacePage({
             directory in trade-log/YYYY/MM/DD/*.json (Asia/Jakarta). Each cycle
             reads up to 32 verified outcome records, bounded to 64 KB, across
             Dry Run and Live with explicit mode labels. This is contextual
-            learning, not model retraining. Click Run cycle to evaluate the next
-            open, close, or hold; approve a proposal to execute.
+            learning, not model retraining. Start automatic cycles to evaluate
+            the next open, close, or hold; approve a proposal to execute.
           </p>
           <h3>Live validation gate</h3>
           <p>

@@ -117,7 +117,28 @@ pub struct LiveState {
     pub unlocked: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
+pub struct CycleSchedule {
+    pub enabled: bool,
+    pub interval_seconds: u64,
+    pub next_run_at: Option<u64>,
+    pub last_error: Option<String>,
+}
+impl Default for CycleSchedule {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_seconds: 300,
+            next_run_at: None,
+            last_error: None,
+        }
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RuntimeState {
+    #[serde(default)]
+    pub pumpfun_config: crate::pumpfun::Config,
+    #[serde(default)]
+    pub cycle_schedule: CycleSchedule,
     #[serde(default)]
     pub market_error: Option<String>,
     #[serde(default)]
@@ -164,6 +185,7 @@ pub struct Readiness {
 }
 #[derive(Serialize)]
 pub struct Snapshot {
+    pub pumpfun: crate::pumpfun::Discovery,
     #[serde(flatten)]
     pub state: RuntimeState,
     pub portfolio: Portfolio,
@@ -197,6 +219,14 @@ pub enum Action {
         mode: TradingMode,
     },
     RunCycle,
+    ConfigureCycles {
+        interval_seconds: u64,
+    },
+    ConfigurePumpfun {
+        config: crate::pumpfun::Config,
+    },
+    StartCycles,
+    StopCycles,
     ApproveProposal {
         id: String,
     },

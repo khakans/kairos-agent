@@ -18,7 +18,8 @@ async function request(path: string, body?: unknown) {
       ? { "Content-Type": "application/json", "x-kairos-command": "1" }
       : {},
     body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(90_000),
+    // Allow the Rust cycle budget (up to 935s); status polling and Stop remain independent.
+    signal: AbortSignal.timeout(path === "/commands" ? 960_000 : 15_000),
   });
   const data: unknown = await response
     .json()

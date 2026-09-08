@@ -5,7 +5,6 @@ import {
   Boxes,
   CircleHelp,
   ClipboardList,
-  Command,
   FileClock,
   Globe,
   Layers3,
@@ -23,6 +22,7 @@ import { useState, type ReactNode } from "react";
 import type { Mode, Page } from "../../lib/contracts";
 import { Badge } from "../atoms/badge";
 import { Button } from "../atoms/button";
+import { BrandLogo } from "../atoms/brand-logo";
 const primary: [Page, LucideIcon][] = [
   ["Overview", LayoutDashboard],
   ["Agent Field", Boxes],
@@ -76,13 +76,7 @@ export function CommandLayout({
       )}
       <aside className={`sidebar ${open ? "is-open" : ""}`}>
         <div className="brand">
-          <span className="brand-mark">
-            <Command size={22} />
-          </span>
-          <div>
-            kairos<span className="brand-agent">agent</span>
-          </div>
-          <span className="brand-version">/ 01</span>
+          <BrandLogo />
           <Button
             className="mobile-only"
             variant="ghost"
@@ -94,7 +88,9 @@ export function CommandLayout({
           </Button>
         </div>
         <div className="workspace-switch">
-          <span className="workspace-avatar">K</span>
+          <span className="workspace-avatar">
+            <BrandLogo mark />
+          </span>
           <div>
             <strong>My workspace</strong>
             <span>Personal runtime</span>
@@ -162,9 +158,12 @@ export function CommandLayout({
             >
               <Menu size={20} />
             </Button>
-            <span>Workspace</span>
-            <span className="slash">/</span>
-            <strong>{page}</strong>
+            <span className="mobile-only mobile-brand">
+              <BrandLogo />
+            </span>
+            <span className="breadcrumb-location">Workspace</span>
+            <span className="slash breadcrumb-location">/</span>
+            <strong className="breadcrumb-location">{page}</strong>
           </div>
           <div className="topbar-right">
             <span className="network">
@@ -235,7 +234,7 @@ export function CommandLayout({
           {children}
           <footer className="page-footer">
             <span>
-              <span className="footer-cross">✳</span> KAIROS AGENT{" "}
+              <BrandLogo />
               <span className="muted">/</span> AI proposes. The core decides.
             </span>
             <span>

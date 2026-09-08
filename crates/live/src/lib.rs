@@ -35,7 +35,7 @@ const ATA: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 const WHIRLPOOL: &str = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc";
 const SYSTEM: &str = "11111111111111111111111111111111";
 const COMPUTE: &str = "ComputeBudget111111111111111111111111111111";
-const MAINNET: &str = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+pub const MAINNET: &str = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
 pub const FEE_RESERVE_LAMPORTS: u64 = 20_000_000;
 pub const MAX_FEE_LAMPORTS: u64 = 100_000;
 pub fn new_keypair_bytes() -> Vec<u8> {
@@ -797,6 +797,10 @@ mod tests {
     use super::*;
     #[test]
     fn endpoint_and_simulation_fail_closed() {
+        assert!(
+            Hash::from_str(MAINNET).is_ok(),
+            "Genesis hash must be a full 32-byte hash"
+        );
         assert!(validate_endpoint("http://localhost:8899").is_err());
         assert!(validate_endpoint("https://user:secret@example.com").is_err());
         assert!(validate_endpoint("https://api.mainnet-beta.solana.com").is_ok());

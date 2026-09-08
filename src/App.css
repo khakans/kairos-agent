@@ -163,25 +163,19 @@ button:disabled:hover {
   font-weight: 650;
   letter-spacing: -1px;
 }
-.brand-mark {
-  background: var(--ink);
-  color: #f0f1dd;
-  width: 33px;
-  height: 33px;
-  border-radius: 7px;
-  display: grid;
-  place-items: center;
+/* Artwork keeps its original black/gold palette and proportions. */
+.brand-logo {
+  display: block;
+  width: 150px;
+  height: auto;
+  flex: 0 1 auto;
 }
-.brand-agent {
-  font-weight: 400;
-  color: #747a6c;
-  margin-left: 2px;
+.brand-logo--mark {
+  width: 19px;
+  height: 23px;
 }
-.brand-version {
-  font: 9px var(--mono);
-  color: #969a90;
-  letter-spacing: 0;
-  margin-left: auto;
+.mobile-brand .brand-logo {
+  width: 92px;
 }
 .workspace-switch {
   margin: 7px 17px 23px;
@@ -828,6 +822,261 @@ main#main-content {
   background-image: radial-gradient(#dbe0d1 0.7px, transparent 0.7px);
   background-size: 12px 12px;
 }
+.cycle-progress {
+  border: 1px solid #dce3cd;
+  border-radius: 7px;
+  background: #fafcf5;
+  padding: 18px 20px 13px;
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto;
+  gap: 14px 24px;
+  margin-bottom: 20px;
+}
+.cycle-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+  border: 1px solid #dce3cd;
+  border-radius: 7px;
+  background: #fafcf5;
+}
+.cycle-schedule-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #64782d;
+  min-width: 0;
+}
+.cycle-schedule-status strong {
+  display: block;
+  font-size: 12px;
+  color: #384332;
+}
+.cycle-schedule-status span {
+  display: block;
+  font-size: 10px;
+  line-height: 1.6;
+  color: #717669;
+  overflow-wrap: anywhere;
+}
+.cycle-interval {
+  display: grid;
+  grid-template-columns: 72px 94px auto auto;
+  align-items: end;
+  gap: 7px;
+}
+.cycle-interval label {
+  font-size: 10px;
+  color: #717669;
+}
+.cycle-interval input,
+.cycle-interval select {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  margin-top: 4px;
+  padding: 5px 7px;
+  border: 1px solid #dce3cd;
+  border-radius: 4px;
+  background: white;
+  color: #384332;
+  font: inherit;
+}
+.cycle-interval small {
+  grid-column: 1 / -1;
+  font-size: 9px;
+  color: #717669;
+}
+@media (max-width: 1050px) {
+  .cycle-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .cycle-interval {
+    grid-template-columns: 1fr 1fr auto auto;
+  }
+}
+@media (max-width: 520px) {
+  .cycle-controls {
+    padding: 14px 12px;
+  }
+  .cycle-interval {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.cycle-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.cycle-glyph {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #edf2dd;
+  color: #64782d;
+}
+.cycle-summary strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #384332;
+}
+.cycle-summary .eyebrow {
+  font-size: 8px;
+  letter-spacing: 1.5px;
+}
+.cycle-elapsed {
+  margin-left: auto;
+  font: 12px var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: #75805e;
+}
+.cycle-stages {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.cycle-stages li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: #7b8273;
+}
+.cycle-stages li > span {
+  display: grid;
+  place-items: center;
+  height: 23px;
+  width: 23px;
+  border: 1px solid #dce2d1;
+  border-radius: 50%;
+  font: 10px var(--mono);
+  flex-shrink: 0;
+}
+.cycle-stages .is-current {
+  color: #3e521d;
+  font-weight: 600;
+}
+.cycle-stages .is-current > span {
+  background: #e8efcd;
+  border-color: #a0b666;
+}
+.cycle-stages .is-complete {
+  color: #547243;
+}
+.cycle-stages .is-complete > span {
+  background: #edf3e7;
+  border-color: #bbcfab;
+}
+.cycle-completion {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+.cycle-completion progress {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  height: 3px;
+  accent-color: #81954a;
+}
+.cycle-completion > span {
+  white-space: nowrap;
+  font: 9px var(--mono);
+  color: #707d5d;
+}
+.cycle-progress.is-active {
+  border-color: #b8c890;
+  background: #f8fbed;
+}
+.cycle-progress.is-failed {
+  border-color: #dab8aa;
+}
+.cycle-progress.is-failed .cycle-glyph,
+.cycle-stages .is-failed {
+  color: #a04d35;
+}
+.agent-node.agent-running {
+  border-color: #9fb76a;
+  background: #f8fbed;
+  overflow: hidden;
+  animation: agent-breathe 2.4s ease-in-out infinite;
+}
+.agent-node.agent-running::after {
+  content: "";
+  position: absolute;
+  left: -45%;
+  bottom: 0;
+  width: 45%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #8aa450, transparent);
+  animation: agent-scan 2s ease-in-out infinite;
+}
+.agent-node.agent-running .agent-status {
+  color: #506b27;
+}
+.agent-node.agent-complete .agent-status {
+  color: #4f7240;
+}
+.agent-node.agent-failed {
+  border-color: #d6aa98;
+}
+.agent-node.agent-failed .agent-status {
+  color: #a35037;
+}
+.agent-node.agent-waiting {
+  border-style: dashed;
+}
+.agent-status > svg:first-child {
+  margin-left: 0;
+  color: inherit;
+}
+@keyframes agent-breathe {
+  50% {
+    box-shadow: 0 0 0 3px #a8bb7026;
+  }
+}
+@keyframes agent-scan {
+  to {
+    left: 100%;
+  }
+}
+@media (max-width: 1100px) {
+  .cycle-progress {
+    grid-template-columns: 1fr;
+  }
+  .cycle-stages {
+    justify-content: space-between;
+  }
+}
+@media (max-width: 520px) {
+  .cycle-progress {
+    padding: 14px 12px;
+    gap: 14px;
+  }
+  .cycle-stages {
+    gap: 6px;
+  }
+  .cycle-stages li {
+    font-size: 10px;
+    gap: 5px;
+  }
+  .cycle-summary strong {
+    font-size: 12px;
+  }
+}
 .agent-node:only-child {
   grid-column: 1 / -1;
 }
@@ -1294,9 +1543,8 @@ td a {
   gap: 9px;
   font-size: 8px;
 }
-.footer-cross {
-  font-size: 17px;
-  color: #96a582;
+.page-footer .brand-logo {
+  width: 70px;
 }
 .footer-divider {
   padding: 0 9px;
@@ -1658,16 +1906,16 @@ td a {
     0 0 0 111px #414d33;
 }
 .welcome-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 27px;
-  letter-spacing: -1px;
+  display: block;
+  align-self: flex-start;
+  padding: 12px 18px;
+  background: #fafaf7;
+  border-radius: 9px;
+  position: relative;
+  z-index: 1;
 }
-.welcome-brand > span {
-  font-weight: 400;
-  color: #a2b18b;
-  margin-left: -8px;
+.welcome-brand .brand-logo {
+  width: 190px;
 }
 .welcome-art .eyebrow {
   color: #adb89b;
@@ -1766,9 +2014,6 @@ td a {
     padding: 0 15px;
     font-size: 21px;
   }
-  .brand-version {
-    display: none;
-  }
   .workspace-switch {
     margin-left: 12px;
     margin-right: 12px;
@@ -1849,10 +2094,6 @@ td a {
   .brand {
     font-size: 19px;
     gap: 7px;
-  }
-  .brand-mark {
-    width: 28px;
-    height: 28px;
   }
   .workspace-switch {
     padding: 8px 5px;
@@ -1995,6 +2236,9 @@ td a {
     gap: 9px;
     font-size: 10px;
   }
+  .breadcrumb-location {
+    display: none;
+  }
   .topbar-right {
     gap: 10px;
   }
@@ -2134,8 +2378,8 @@ td a {
     max-width: 430px;
     width: 100%;
   }
-  .welcome-brand {
-    font-size: 22px;
+  .welcome-brand .brand-logo {
+    width: 155px;
   }
   .modal-content {
     padding: 22px;
@@ -2282,4 +2526,61 @@ td {
 }
 .positive-text {
   color: #4f7544;
+}
+.pumpfun-intro,
+.pumpfun-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 20px 24px;
+}
+.pumpfun-intro > div {
+  flex: 1 1 240px;
+}
+.pumpfun-intro p,
+.pumpfun-footnote {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.pumpfun-filters {
+  padding: 0 24px 20px;
+}
+.pumpfun-summary {
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.pumpfun-detail {
+  display: block;
+  max-width: 240px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.pumpfun-table td {
+  vertical-align: top;
+}
+.pumpfun-table {
+  min-width: 1050px;
+}
+.pumpfun-table td:first-child {
+  min-width: 160px;
+}
+.pumpfun-table td:nth-child(2) {
+  min-width: 115px;
+}
+.pumpfun-table td:last-child {
+  min-width: 220px;
+}
+.pumpfun-footnote,
+.pumpfun-error {
+  padding: 16px 24px;
+  margin: 0;
+}
+.pumpfun-error {
+  color: #ac3434;
 }

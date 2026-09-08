@@ -4,6 +4,9 @@ import {
   GitBranch,
   ScanLine,
   Workflow,
+  LoaderCircle,
+  Check,
+  CircleAlert,
 } from "lucide-react";
 import type { Agent } from "../../lib/contracts";
 import { Badge } from "../atoms/badge";
@@ -42,7 +45,8 @@ export function AgentField({
           return (
             <button
               key={agent.id}
-              className={`agent-node agent-color-${index}`}
+              className={`agent-node agent-color-${index} agent-${agent.status.toLowerCase()}`}
+              data-status={agent.status}
               onClick={() => onSelect(agent)}
             >
               <span className="agent-node-top">
@@ -54,9 +58,17 @@ export function AgentField({
               <strong>{agent.name}</strong>
               <span className="agent-role">{agent.role}</span>
               <span className="agent-status">
-                <span
-                  className={`status-dot ${agent.status === "Complete" ? "complete" : "idle"}`}
-                />
+                {agent.status === "Running" ? (
+                  <LoaderCircle size={13} className="spin" aria-hidden="true" />
+                ) : agent.status === "Complete" ? (
+                  <Check size={13} aria-hidden="true" />
+                ) : agent.status === "Failed" ? (
+                  <CircleAlert size={13} aria-hidden="true" />
+                ) : (
+                  <span
+                    className={`status-dot ${agent.status === "Complete" ? "complete" : "idle"}`}
+                  />
+                )}
                 {agent.status}
                 <ArrowRight size={12} />
               </span>

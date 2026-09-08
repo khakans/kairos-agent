@@ -53,6 +53,153 @@ impl Drop for TestRuntime {
 }
 
 #[tokio::test]
+async fn discovery_configuration_is_validated_persisted_and_shared_by_modes() {
+    use kairos_application::pumpfun::Config;
+    let mut runtime = TestRuntime::new().await;
+    for config in [
+        Config {
+            max_pair_age_hours: 0,
+            ..Config::default()
+        },
+        Config {
+            min_volume_h1_usd: Decimal::NEGATIVE_ONE,
+            ..Config::default()
+        },
+        Config {
+            min_liquidity_usd: Decimal::new(1, 3),
+            ..Config::default()
+        },
+    ] {
+        assert!(runtime
+            .command(Action::ConfigurePumpfun { config })
+            .await
+            .is_err());
+    }
+    let config = Config {
+        enabled: true,
+        max_pair_age_hours: 6,
+        min_volume_h1_usd: Decimal::from(50_000),
+        ..Config::default()
+    };
+    runtime
+        .command(Action::ConfigurePumpfun {
+            config: config.clone(),
+        })
+        .await
+        .unwrap();
+    runtime
+        .command(Action::SetMode {
+            mode: TradingMode::Live,
+        })
+        .await
+        .unwrap();
+    assert_eq!(runtime.app().snapshot().state.pumpfun_config, config);
+    assert!(!runtime.app().snapshot().capabilities.signing_enabled);
+    runtime.app.take();
+    runtime.app = Some(Application::open(&runtime.path).unwrap());
+    assert_eq!(runtime.app().state.pumpfun_config, config);
+    assert!(
+        runtime.app().snapshot().pumpfun.candidates.is_empty(),
+        "discovery observations are never restored as fresh market data"
+    );
+    assert!(runtime.app().state.paused);
+}
+
+#[tokio::test]
+async fn automatic_cycles_use_persisted_interval_and_never_overlap() {
+    let mut runtime = TestRuntime::new().await;
+    runtime.start().await;
+    for interval_seconds in [0, 59, 61, 604_860] {
+        assert!(runtime
+            .command(Action::ConfigureCycles { interval_seconds })
+            .await
+            .is_err());
+    }
+    runtime
+        .command(Action::ConfigureCycles {
+            interval_seconds: 60,
+        })
+        .await
+        .unwrap();
+    runtime.command(Action::StartCycles).await.unwrap();
+    runtime.app().scheduler_tick().await.unwrap();
+    assert_eq!(runtime.app().state.cycle_count, 1);
+    assert!(runtime.app().state.cycle_schedule.next_run_at.unwrap() >= kairos_live::now() + 59);
+    runtime.app().scheduler_tick().await.unwrap();
+    assert_eq!(
+        runtime.app().state.cycle_count,
+        1,
+        "no early or nested cycle"
+    );
+    runtime.app().state.cycle_schedule.next_run_at = Some(kairos_live::now());
+    runtime.app().scheduler_tick().await.unwrap();
+    assert_eq!(runtime.app().state.cycle_count, 2);
+    runtime
+        .command(Action::ConfigureCycles {
+            interval_seconds: 7200,
+        })
+        .await
+        .unwrap();
+    assert!(runtime.app().state.cycle_schedule.next_run_at.unwrap() >= kairos_live::now() + 7199);
+    runtime.command(Action::StopCycles).await.unwrap();
+    runtime.app().scheduler_tick().await.unwrap();
+    assert_eq!(runtime.app().state.cycle_count, 2);
+    assert!(!runtime.app().state.cycle_schedule.enabled);
+    assert!(runtime.app().state.cycle_schedule.next_run_at.is_none());
+    runtime.command(Action::StartCycles).await.unwrap();
+    runtime.app.take();
+    let recovered = Application::open(&runtime.path).unwrap();
+    assert_eq!(recovered.state.cycle_schedule.interval_seconds, 7200);
+    assert!(
+        !recovered.state.cycle_schedule.enabled,
+        "process restart requires explicit resume"
+    );
+    runtime.app = Some(recovered);
+}
+
+#[tokio::test]
+async fn automatic_cycle_errors_wait_and_stop_interrupts_analysis() {
+    use std::sync::atomic::Ordering;
+    let mut runtime = TestRuntime::new().await;
+    let feed = upstream::controlled().await;
+    runtime.app().use_test_services(&feed.base);
+    runtime.start().await;
+    runtime
+        .command(Action::ConfigureCycles {
+            interval_seconds: 60,
+        })
+        .await
+        .unwrap();
+    runtime.command(Action::StartCycles).await.unwrap();
+    *feed.control.failed_role.lock().unwrap() = "orchestrator".into();
+    assert!(runtime.app().scheduler_tick().await.is_err());
+    assert!(runtime.app().state.cycle_schedule.enabled);
+    assert!(runtime.app().state.cycle_schedule.next_run_at.unwrap() >= kairos_live::now() + 59);
+    assert!(runtime.app().state.cycle_schedule.last_error.is_some());
+    *feed.control.failed_role.lock().unwrap() = String::new();
+    *feed.control.slow_role.lock().unwrap() = "orchestrator".into();
+    feed.control.delay_ms.store(20_000, Ordering::SeqCst);
+    let stop = runtime.app().cycle_stop.clone();
+    runtime.app().state.cycle_schedule.next_run_at = Some(kairos_live::now());
+    let cancellation = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        stop.store(true, Ordering::SeqCst);
+    });
+    let started = std::time::Instant::now();
+    assert!(runtime
+        .app()
+        .scheduler_tick()
+        .await
+        .unwrap_err()
+        .contains("stopped by operator"));
+    cancellation.await.unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(8));
+    assert!(!runtime.app().state.cycle_schedule.enabled);
+    assert!(runtime.app().state.cycle_schedule.next_run_at.is_none());
+    assert!(runtime.app().state.proposals.is_empty());
+}
+
+#[tokio::test]
 async fn both_modes_share_http_market_and_reject_stale_or_failed_data() {
     use std::sync::atomic::Ordering;
     let mut runtime = TestRuntime::new().await;
