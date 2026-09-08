@@ -1,0 +1,12 @@
+node_modules
+target
+dist
+.git
+.kairos-data
+.smoke-data-*
+test-results
+playwright-report
+*.log
+*.sqlite*
+vault.json
+owner-token

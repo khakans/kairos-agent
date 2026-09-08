@@ -1,0 +1,40 @@
+{
+  "name": "kairos",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "server": "cargo run -p kairos-server",
+    "test": "cargo test --workspace --features kairos-application/test-support",
+    "smoke": "playwright test",
+    "format": "prettier --write src tests *.json *.ts && cargo fmt --all",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@fontsource/dm-sans": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@radix-ui/react-dialog": "^1.1.23",
+    "@tanstack/react-query": "^5.102.8",
+    "@tauri-apps/api": "^2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.42.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@tauri-apps/cli": "^2",
+    "@types/node": "^26.5.0",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^6.0.2",
+    "prettier": "^3.9.6",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.16"
+  }
+}

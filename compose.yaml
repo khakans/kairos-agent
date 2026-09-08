@@ -1,0 +1,23 @@
+services:
+  kairos-agent:
+    build: .
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - kairos-data:/data
+    environment:
+      KAIROS_LEASE_DIR: /data/leases
+      KAIROS_JUPITER_API_KEY: ${KAIROS_JUPITER_API_KEY:-}
+      KAIROS_MARKET_RPC_URL: ${KAIROS_MARKET_RPC_URL:-}
+      KAIROS_AI_URL: ${KAIROS_AI_URL:-}
+      KAIROS_AI_MODEL: ${KAIROS_AI_MODEL:-}
+      KAIROS_AI_API_KEY: ${KAIROS_AI_API_KEY:-}
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  kairos-data:
